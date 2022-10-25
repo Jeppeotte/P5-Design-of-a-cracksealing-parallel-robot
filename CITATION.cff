@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Hansen"
+  given-names: "Flemming"
+- family-names: "Høst Villadsen"
+  given-names: "Gustav"
+- family-names: "Andersen-Otte"
+  given-names: "Jeppe"
+- family-names: "Augustinus Frøhlich"
+  given-names: "Mads"
+- family-names: "Christoffersen"
+  given-names: "Martin"
+- family-names: "Dalum"
+  given-names: "Rasmus"
+title: "P5-Design-of-a-cracksealing-parallel-robot"
+version: 1.0.0
+doi: 10.5281/zenodo.1234
+date-released: 2022-12-21
+url: "https://github.com/Jeppeotte/P5-Design-of-a-cracksealing-parallel-robot"
