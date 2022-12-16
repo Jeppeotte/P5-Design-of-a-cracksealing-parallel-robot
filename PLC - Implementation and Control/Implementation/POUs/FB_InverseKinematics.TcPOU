@@ -1,0 +1,349 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_InverseKinematics" Id="{37d0ec89-3972-4309-ad9e-e7c48669404a}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_InverseKinematics
+VAR_INPUT	
+	//Variables for our polynomial (crack):
+		x 						: LREAL;
+		y 						: LREAL;
+		dx 						: LREAL;
+		dy 						: LREAL;
+	
+	//Variables for the polynomial (MatLab):
+		//Coefficients for x:
+		a0x						: LREAL;
+		a1x						: LREAL;
+		a2x						: LREAL;
+		a3x						: LREAL;
+	
+		//Coefficients for y:
+		a0y						: LREAL;
+		a1y						: LREAL;
+		a2y						: LREAL;
+		a3y						: LREAL;
+END_VAR
+
+VAR_OUTPUT
+	//Arrays with pulse difference for the crack
+	aPulseDiffForTheCrackTheta1:ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	aPulseDiffForTheCrackTheta2:ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	
+	//Arrays for saving angular velocity in volts:
+	aThetaDot1RadianPerSecToVoltINT_InverseKinematics: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	aThetaDot2RadianPerSecToVoltINT_InverseKinematics: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	
+	//When InverseKinematics is done:
+	bDoneINV					: BOOL ;
+END_VAR
+
+VAR
+//Timer and counters:
+	tTimer 					: LREAL ;
+	iNbOfRuns 				: INT;
+	
+//Conversion variabales:
+	RadianToPulse			: LREAL;
+	nRadToRPM				: LREAL;
+	nRPMToVolt				: LREAL;
+	nNumberOfVolts			: LREAL :=10;
+	nMaxRPM					: LREAL :=12000;
+	nMaxPositiveINT			: LREAL :=32767;
+	nVoltsInINT				: LREAL;
+	n1VoltToINT				: LREAL;
+	n180Degrees				: LREAL := 180;
+
+//Variables for Position kinematics:
+	//Variables for calculating the discriminant:
+	nA1 					: LREAL;
+	nA2 					: LREAL;
+	nB1 					: LREAL;
+	nB2 					: LREAL;
+	nC1 					: LREAL;
+	nC2 					: LREAL;
+	
+	//Variabels for +- configuration:
+	nPsi1 					: LREAL := 1 ;
+	nPsi2 					: LREAL := -1 ;
+	
+	//Discriminant for calculating angles:
+	nZi1 					: LREAL;
+	nZi2 					: LREAL;	
+		//discirinant variables:
+		vZi1Numerator 		: LREAL ;
+		vZi1Denumerator		: LREAL ;
+		
+		vZi2Numerator 		: LREAL ;
+		vZi2Denumerator		: LREAL ;
+		
+	// Variables for thetadot1 and 2 for calculating the angular velocity: 
+	//#1
+	vThetaDot1Numerator 	: LREAL ;
+	vThetaDot1Denominator	: LREAL ;
+	
+	//#2
+	vThetaDot2Numerator		: LREAL ;
+	vThetaDot2Denominator	: LREAL ;
+	
+	//The 2 angles:
+	nTheta1 				: LREAL ;
+	nTheta2 				: LREAL ;
+	
+	//Angular Velocity:
+	nThetaDot1 				: LREAL ;
+	nThetaDot2 				: LREAL ;
+	
+	//Arrays for the angles theta1 and theta2
+	aTheta1 				: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+	aTheta2 				: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+	
+	//Arrays for the angular velocity thetadot1 and thetadot2
+	aThetaDot1 				: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+	aThetaDot2 				: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+
+	//Arrays saving y, x, dx, dy, ddx and ddy in the following code (for loops)
+	aArrayForVariabley 		: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+	aArrayForVariablex 		: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+	aArrayForVariabledy 	: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+	aArrayForVariabledx 	: ARRAY[0..NUMBER_OF_RUNS] OF LREAL;
+
+	//Arrays for theta 1 in pulse counts:
+	aTheta1InPulses:ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	aTheta2InPulses:ARRAY[0..NUMBER_OF_RUNS] OF INT;
+END_VAR
+
+VAR CONSTANT
+	//Number of runs the loop has to continue (discretization)
+	NUMBER_OF_RUNS : INT := 20 ;
+	
+	//Lengths of the arms and distance between motors:
+	L0Full	: REAL := 0.1;
+	L0		: REAL := 0.05; 
+	L1		: REAL := 0.3325;
+	L2		: REAL := 0.3325;
+	L3		: REAL := 0.3825;
+	L4		: REAL := 0.3825;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[//Setting a bool to know if invers kinemarics calculations are finished:
+	bDoneINV := FALSE;
+
+// Rad to pulse convertation:
+	RadianToPulse		:= (pi*2)/(500*43);
+	
+//Polunomial coeffiecients, these are calculated in MatLab:
+	//Coefficents for x:
+	a0x := 	0.1492;
+	a1x := 	0;	
+	a2x :=	-1.2308;
+	a3x :=	0;	
+	
+	//Coefficients for y:
+	a0y :=	0.4500;				
+	a1y :=	0;								
+	a2y :=	-0.7500;					
+	a3y :=	0.5;	
+
+//Calculating position and velocity for the polynomial:
+	FOR iNbOfRuns 	:= 0 TO NUMBER_OF_RUNS BY 1 DO
+	
+	// A timer for diskretisation:
+		tTimer		:= 0.05 * iNbOfRuns;
+		
+	// Calculating x and y: (Position)
+		y 			:= a0y + a1y * tTimer + a2y * EXPT(tTimer,2) + a3y * EXPT(tTimer,3);
+		x 			:= a0x + a1x*(a0y + a1y* + a2y*EXPT(tTimer,2) + a3y*EXPT(tTimer,3)) + a2x*EXPT((a0y + a1y*tTimer + a2y*EXPT(tTimer,2) + a3y*EXPT(tTimer,3)),2) + a3x*EXPT((a0y + a1y*tTimer + a2y*EXPT(tTimer,2) + a3y*EXPT(tTimer,3)),3);
+	
+	// Calculating dx and dy: (Velocity)
+		dy 			:= a1y + 2*a2y*tTimer + 3*a3y*EXPT(tTimer,2);
+		dx 			:= a1x + 2*a2x*(a1y + 2*a2y*tTimer + 3*a3y*EXPT(tTimer,2))*(a0y + a1y*tTimer + a2y*EXPT(tTimer,2) + a3y*EXPT(tTimer,3)) + 3*a3x*(a1y + 2*a2y*tTimer + 3*a3y*EXPT(tTimer,2))*EXPT((a0y + a1y*tTimer + a2y*EXPT(tTimer,2) + a3y*EXPT(tTimer,3)),2);
+		
+		
+	//Arrays for saving data
+		aArrayForVariabley[iNbOfRuns] 	:= y;
+		aArrayForVariablex[iNbOfRuns] 	:= x;
+		aArrayForVariabledy[iNbOfRuns] 	:= dy;
+		aArrayForVariabledx[iNbOfRuns] 	:= dx;
+	END_FOR	
+
+//---------------------------------------Calculating angular position of the 2 motors--------------------------------------------------
+	
+FOR iNbOfRuns := 0 TO NUMBER_OF_RUNS BY 1 DO
+		
+	//Variables for calculating position:
+	nA1 := EXPT(L1,2) + EXPT(aArrayForVariabley[iNbOfRuns],2)+EXPT(aArrayForVariablex[iNbOfRuns]+L0,2)-EXPT(L3,2)+2*(((aArrayForVariablex[iNbOfRuns]+L0))*L1);
+	nB1 := -4*aArrayForVariabley[iNbOfRuns]*L1;
+	nC1 := (EXPT(L1,2)) +(EXPT(aArrayForVariabley[iNbOfRuns],2))+EXPT(L0+aArrayForVariablex[iNbOfRuns],2)-(EXPT(L3,2))-(2*(aArrayForVariablex[iNbOfRuns]+L0)*L1);
+	nA2 := (EXPT(L2,2) + EXPT(aArrayForVariabley[iNbOfRuns],2))+EXPT(L0-aArrayForVariablex[iNbOfRuns],2)-(EXPT(L4,2))+2*(((aArrayForVariablex[iNbOfRuns]-L0))*L2);
+	nB2 := -4*aArrayForVariabley[iNbOfRuns]*L2;
+	nC2 := (EXPT(L2,2)) +(EXPT(aArrayForVariabley[iNbOfRuns],2))+EXPT(L0-aArrayForVariablex[iNbOfRuns],2)-(EXPT(L4,2))-(2*(aArrayForVariablex[iNbOfRuns]-L0)*L2);
+	
+	// Calculating the numerator and denumerator:
+		//Zi1
+		vZi1Numerator 	:= (-nB1+nPsi1*SQRT(EXPT(nB1,2) - 4*nA1*nC1));
+		vZi1Denumerator := (2*nA1);
+		
+		//Zi2
+		vZi2Numerator	:= (-nB2+nPsi2*SQRT(EXPT(nB2,2)- 4*nA2*nC2));
+		vZi2Denumerator := (2*nA2);
+			
+	// Finding the discriminant	
+	nZi1 := vZi1Numerator / vZi1Denumerator;
+	nZi2 := vZi2Numerator / vZi2Denumerator;
+			
+	//Finding the angles
+	nTheta1 := 2*ATAN(nZi1) ;
+	nTheta2 := 2*ATAN(nZi2) ;
+	
+	//Saving theta 1 and 2 in array for later use:
+	aTheta1[iNbOfRuns] := nTheta1;
+	aTheta2[iNbOfRuns] := nTheta2;
+
+//------------------------------------------Pulse difference for the crack sealing------------------------------------------------
+	
+	//Finding the difference between the starting angle and the desired angle for theta 1:
+		aTheta1InPulses[iNbOfRuns] 				:= LREAL_TO_INT(nTheta1 / RadianToPulse) ;
+		aPulseDiffForTheCrackTheta1[iNbOfRuns] 	:= LREAL_TO_INT(aTheta1InPulses[iNbOfRuns+1]-aTheta1InPulses[iNbOfRuns]);
+		
+	//Finding the difference between the starting angle and the desired angle for theta 1:
+		aTheta2InPulses[iNbOfRuns] 				:= LREAL_TO_INT(nTheta2 / RadianToPulse) ;
+		aPulseDiffForTheCrackTheta2[iNbOfRuns] 	:= LREAL_TO_INT(aTheta2InPulses[iNbOfRuns+1]-aTheta2InPulses[iNbOfRuns]);
+END_FOR	
+
+// Making GVL's for use in main code:
+	//Start angle of crack for the motors:
+	GVL_Data.nStartAngleOfCrack1 := aTheta1[0];
+	GVL_Data.nStartAngleOfCrack2 := aTheta2[0];
+	
+	//Final angle of crack for the motors:
+	GVL_Data.nFinalAngleOfCrack1 := aTheta1[NUMBER_OF_RUNS];
+	GVL_Data.nFinalAngleOfCrack2 := aTheta2[NUMBER_OF_RUNS];
+	
+	//Start angle of crack in pulses;
+	GVL_Data.nStartAngleOfCrackInPulse1 := LREAL_TO_INT(aTheta1[0]/RadianToPulse);
+	GVL_Data.nStartAngleOfCrackInPulse2 := LREAL_TO_INT(aTheta2[0]/RadianToPulse);
+	
+	//Start angle of crack in pulses;
+	GVL_Data.nFinalAngleOfCrackInPulse1 := LREAL_TO_INT(aTheta1[NUMBER_OF_RUNS]/RadianToPulse);
+	GVL_Data.nFinalAngleOfCrackInPulse2 := LREAL_TO_INT(aTheta2[NUMBER_OF_RUNS]/RadianToPulse);
+
+//------------------------------------------Angular Velocity-----------------------------------------------------------------------
+
+// Conversion variables:
+	nRadToRPM				:= (60*43)/(2*pi);
+	nRPMToVolt				:= nNumberOfVolts/nMaxRPM ;
+	nVoltsInINT				:= nNumberOfVolts/nMaxPositiveINT;
+	n1VoltToINT				:= (1/(nVoltsInINT));
+	
+FOR iNbOfRuns := 0 TO NUMBER_OF_RUNS-1 DO
+//-------------------Thetadot1----------------------------------------------------------------------------------------------------
+	//Calculating numerator and denominator for angular velocity (thetadot1):	
+		vThetaDot1Numerator   	:= (-2 * (aArrayForVariablex[iNbOfRuns] + L0 - L1 * COS(aTheta1[iNbOfRuns])) * aArrayForVariabledx[iNbOfRuns] - 2 * (aArrayForVariabley[iNbOfRuns] - L1 * SIN(aTheta1[iNbOfRuns])) * aArrayForVariabledy[iNbOfRuns]);
+		vThetaDot1Denominator 	:= (2 * L1 * (SIN(aTheta1[iNbOfRuns]) * (aArrayForVariablex[iNbOfRuns] + L0)) - aArrayForVariabley[iNbOfRuns] * COS(aTheta1[iNbOfRuns]));
+
+	// Calculating thetadot1:
+		nThetaDot1 				:=  vThetaDot1Numerator / vThetaDot1Denominator;
+		aThetaDot1[iNbOfRuns] 	:= nThetaDot1;
+	
+	// Converting angular velocity to VoltINT for thetadot 1:
+		aThetaDot1RadianPerSecToVoltINT_InverseKinematics[iNbOfRuns] 	:= ABS(LREAL_TO_INT(nThetaDot1 * nRadToRPM * nRPMToVolt * nVoltsInINT * n1VoltToINT));
+		
+//--------------------Thetadot2-----------------------------------------------------------------------------------------------------		
+	//Calculating numerator and denominator for angular velocity (thetadot2):
+		vThetaDot2Numerator   	:= (-2 * (aArrayForVariablex[iNbOfRuns] + L0 - L2 * COS(aTheta2[iNbOfRuns])) * aArrayForVariabledx[iNbOfRuns] - 2 * (aArrayForVariabley[iNbOfRuns] - L2 * SIN(aTheta2[iNbOfRuns])) * aArrayForVariabledy[iNbOfRuns]);
+		vThetaDot2Denominator 	:= (2 * L2 * (SIN(aTheta2[iNbOfRuns]) * (aArrayForVariablex[iNbOfRuns] - L0)) - aArrayForVariabley[iNbOfRuns] * COS(aTheta2[iNbOfRuns]));
+	
+	// Calculating thetadot2:
+		nThetaDot2 				:= vThetaDot2Numerator / vThetaDot2Denominator;
+		aThetaDot2[iNbOfRuns] 	:= nThetaDot2;
+	
+	// Converting angular velocity to VoltINT for thetadot 2:
+		aThetaDot2RadianPerSecToVoltINT_InverseKinematics[iNbOfRuns] 	:= ABS(LREAL_TO_INT(nThetaDot2 * nRadToRPM * nRPMToVolt * nVoltsInINT * n1VoltToINT));
+END_FOR
+	
+//Inverse kinematics finished:
+bDoneINV := TRUE;
+]]></ST>
+    </Implementation>
+    <LineIds Name="FB_InverseKinematics">
+      <LineId Id="1768" Count="0" />
+      <LineId Id="1448" Count="0" />
+      <LineId Id="2010" Count="0" />
+      <LineId Id="1766" Count="0" />
+      <LineId Id="2012" Count="0" />
+      <LineId Id="2011" Count="0" />
+      <LineId Id="1449" Count="0" />
+      <LineId Id="1453" Count="0" />
+      <LineId Id="1773" Count="0" />
+      <LineId Id="1769" Count="3" />
+      <LineId Id="1774" Count="0" />
+      <LineId Id="1454" Count="0" />
+      <LineId Id="1456" Count="0" />
+      <LineId Id="1458" Count="0" />
+      <LineId Id="1460" Count="0" />
+      <LineId Id="1775" Count="0" />
+      <LineId Id="1461" Count="2" />
+      <LineId Id="1939" Count="0" />
+      <LineId Id="1938" Count="0" />
+      <LineId Id="1464" Count="0" />
+      <LineId Id="1940" Count="0" />
+      <LineId Id="1465" Count="2" />
+      <LineId Id="1941" Count="0" />
+      <LineId Id="1468" Count="8" />
+      <LineId Id="1478" Count="0" />
+      <LineId Id="1942" Count="0" />
+      <LineId Id="1479" Count="1" />
+      <LineId Id="1953" Count="0" />
+      <LineId Id="1481" Count="0" />
+      <LineId Id="1943" Count="0" />
+      <LineId Id="1482" Count="7" />
+      <LineId Id="1944" Count="1" />
+      <LineId Id="1493" Count="1" />
+      <LineId Id="1946" Count="0" />
+      <LineId Id="1495" Count="9" />
+      <LineId Id="2068" Count="3" />
+      <LineId Id="2009" Count="0" />
+      <LineId Id="2005" Count="0" />
+      <LineId Id="2007" Count="0" />
+      <LineId Id="2022" Count="0" />
+      <LineId Id="2008" Count="0" />
+      <LineId Id="2027" Count="0" />
+      <LineId Id="2029" Count="0" />
+      <LineId Id="2031" Count="1" />
+      <LineId Id="2030" Count="0" />
+      <LineId Id="1509" Count="0" />
+      <LineId Id="1949" Count="0" />
+      <LineId Id="1510" Count="1" />
+      <LineId Id="1950" Count="0" />
+      <LineId Id="1512" Count="0" />
+      <LineId Id="1951" Count="1" />
+      <LineId Id="1516" Count="1" />
+      <LineId Id="2039" Count="0" />
+      <LineId Id="2042" Count="0" />
+      <LineId Id="2040" Count="1" />
+      <LineId Id="2215" Count="0" />
+      <LineId Id="2217" Count="1" />
+      <LineId Id="2216" Count="0" />
+      <LineId Id="1519" Count="3" />
+      <LineId Id="2065" Count="2" />
+      <LineId Id="1964" Count="0" />
+      <LineId Id="2054" Count="0" />
+      <LineId Id="1528" Count="0" />
+      <LineId Id="1976" Count="0" />
+      <LineId Id="1529" Count="2" />
+      <LineId Id="1955" Count="0" />
+      <LineId Id="1532" Count="1" />
+      <LineId Id="2081" Count="0" />
+      <LineId Id="1536" Count="2" />
+      <LineId Id="1974" Count="1" />
+      <LineId Id="1551" Count="3" />
+      <LineId Id="1977" Count="0" />
+      <LineId Id="1555" Count="0" />
+      <LineId Id="2082" Count="0" />
+      <LineId Id="1970" Count="0" />
+      <LineId Id="1972" Count="1" />
+      <LineId Id="1570" Count="1" />
+      <LineId Id="1601" Count="1" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
