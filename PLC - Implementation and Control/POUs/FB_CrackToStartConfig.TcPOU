@@ -1,0 +1,227 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_CrackToStartConfig" Id="{bea5097c-bebc-4167-b071-e8eec1160da0}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_CrackToStartConfig
+VAR_INPUT
+	//Variables for the polynomial for the left motor:
+	a0Left 						: LREAL ;
+	a1Left 						: LREAL ;
+	a2Left 						: LREAL ;
+	a3Left 						: LREAL ;
+	
+	//Variables for the polynomial for the right motor:
+	a0Right 					: LREAL ;
+	a1Right						: LREAL ;
+	a2Right						: LREAL ;
+	a3Right 					: LREAL ;
+END_VAR
+
+VAR_OUTPUT
+END_VAR
+
+VAR
+//Timer, counter and states for CASE shifts:
+	tTimer 									: LREAL ;
+	iVelocityCounter						: INT;
+	iCrackCounter							: INT;
+	nStateCrackToStartConfig				: INT;
+	bStep15Done								: BOOL;
+	bMoveFromCrackToStartConfigDone			: BOOL;
+
+//Angle and angular velocity for theta 1 (left motor):
+	nTheta1CrackToStartConfig				: LREAL;	
+	nThetaDot1CrackToStartConfig			: LREAL;
+	nPulseDiffFromCrackToStartConfigLeft	: INT;
+	nVelocityForCrackToStartConfigLeft		: INT;
+
+//Arrays for saving angle and angular velocity:
+	aPulseFromCrackToStartConfig1			: ARRAY [0..NUMBER_OF_RUNS] OF INT;
+	aPulseDiffFromCrackToStartConfig1		: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	aThetaDot1RadianPerSecToVoltINT_CTS		: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	
+//Angle and angular velocity for theta 2 (right motor):	
+	nTheta2CrackToStartConfig				: LREAL;
+	nThetaDot2CrackToStartConfig			: LREAL;
+	nPulseDiffFromCrackToStartConfigRight	: INT;
+	nVelocityForCrackToStartConfigRight		: INT;
+	
+//Arrays for saving angle and angular velocity for theta 2 (right motor):
+	aPulseFromCrackToStartConfig2			: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	aPulseDiffFromCrackToStartConfig2		: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+	aThetaDot2RadianPerSecToVoltINT_CTS		: ARRAY[0..NUMBER_OF_RUNS] OF INT;
+
+//Conversion variables:
+	RadianToPulse 							: LREAL;
+	nRadToRPM								: LREAL;
+	nRPMToVolt								: LREAL;
+	nVoltsInINT								: LREAL;
+	n1VoltToINT								: LREAL;
+
+//Calculation help;	
+	nNumberOfVolts							: LREAL :=10;
+	nMaxRPM									: LREAL :=12000;
+	nMaxPositiveINT							: LREAL :=32767;
+END_VAR
+
+VAR CONSTANT
+	//Number of runs the loop has to continue
+	NUMBER_OF_RUNS						 : INT := 50 ;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Rad to pulse convertation:
+	RadianToPulse		:= (pi*2)/(500*43);
+
+// Calculating a-values for left mortor:
+	a0Left := GVL_VariableData.nFinalAngleOfCrack1 ;
+	a1Left := 0 ;
+	a2Left := 3/(EXPT(5,2))*(GVL_VariableData.nStartConfigAngleLeft  - a0Left) ;
+	a3Left := -2/(EXPT(5,3))*(GVL_VariableData.nStartConfigAngleLeft  - a0Left) ;
+	
+// Calculating a-values for right mortor:
+	a0Right := GVL_VariableData.nFinalAngleOfCrack2 ;
+	a1Right := 0 ;
+	a2Right := 3/(EXPT(5,2))*((GVL_VariableData.nStartConfigAngleRight) - a0Right) ;
+	a3Right := -2/(EXPT(5,3))*((GVL_VariableData.nStartConfigAngleRight) - a0Right) ;
+	
+// Calculating Variables:
+	nRadToRPM				:= (60*43)/(2*pi);
+	nRPMToVolt				:= nNumberOfVolts/nMaxRPM ;
+	nVoltsInINT				:= nNumberOfVolts/nMaxPositiveINT;
+	n1VoltToINT				:= (1/(nVoltsInINT));
+
+FOR iVelocityCounter	:= 0 TO NUMBER_OF_RUNS BY 1 DO
+	
+//Timer for discretization:
+	tTimer		:= 0.1 * iVelocityCounter ;
+		
+// Left motor:
+	nTheta1CrackToStartConfig 		:= a0Left + (a1Left*tTimer) + (a2Left * EXPT(tTimer,2)) + (a3Left * EXPT(tTimer,3)) ;	
+	nThetaDot1CrackToStartConfig 	:= a1Left + (2 * a2Left *tTimer) + (3 * a3Left * EXPT(tTimer,2)) ;
+		
+// Right motor:
+	nTheta2CrackToStartConfig 		:= a0Right + (a1Right*tTimer) + (a2Right * EXPT(tTimer,2)) + (a3Right * EXPT(tTimer,3)) ;	
+	nThetaDot2CrackToStartConfig 	:= a1Right + (2 * a2Right *tTimer) + (3 * a3Right * EXPT(tTimer,2)) ;
+	
+//Arrays for saving data: (CTS = crack to start configuration)
+	// Left motor:
+	aPulseFromCrackToStartConfig1[iVelocityCounter] 			:= LREAL_TO_INT(nTheta1CrackToStartConfig / RadianToPulse) ;
+	aPulseDiffFromCrackToStartConfig1[iVelocityCounter] 		:= LREAL_TO_INT(aPulseFromCrackToStartConfig1[iVelocityCounter+1]-aPulseFromCrackToStartConfig1[iVelocityCounter]);
+	aThetaDot1RadianPerSecToVoltINT_CTS[iVelocityCounter]		:= ABS(LREAL_TO_INT((nThetaDot1CrackToStartConfig * (nRadToRPM) * (nRPMToVolt) * (n1VoltToINT)))) ;
+
+	// Right motor: (CTS = crack to start configuration)
+	aPulseFromCrackToStartConfig2[iVelocityCounter] 			:= LREAL_TO_INT(nTheta2CrackToStartConfig / RadianToPulse) ;
+	aPulseDiffFromCrackToStartConfig2[iVelocityCounter]			:= LREAL_TO_INT(aPulseFromCrackToStartConfig2[iVelocityCounter+1]-aPulseFromCrackToStartConfig2[iVelocityCounter]);
+	aThetaDot2RadianPerSecToVoltINT_CTS[iVelocityCounter]		:= ABS(LREAL_TO_INT((nThetaDot2CrackToStartConfig * (nRadToRPM) * (nRPMToVolt) * (n1VoltToINT)))) ;
+END_FOR
+
+CASE nStateCrackToStartConfig OF
+0: //-------------------------------------------Initiating movement fra start configuration to crack------------------------------
+
+	bMoveFromCrackToStartConfigDone := FALSE;
+
+	IF MAIN.bDoneCrackSealing THEN
+		nStateCrackToStartConfig := 10;
+	END_IF
+	
+10: //------------------------------------Left and right motor to crack start---------------------------------------------------------
+
+//Making a counter depend on the following half step in case:
+	IF bStep15Done THEN
+		iCrackCounter := iCrackCounter + 1;
+		bStep15Done := FALSE;
+	END_IF
+
+//Saving angle and velocity in volt for next case step:
+	//Left motor:
+	nPulseDiffFromCrackToStartConfigLeft 	:= aPulseDiffFromCrackToStartConfig1[iCrackCounter];
+	nVelocityForCrackToStartConfigLeft 		:= aThetaDot1RadianPerSecToVoltINT_CTS[iCrackCounter];
+	
+	//Right motor:
+	nPulseDiffFromCrackToStartConfigRight 	:= aPulseDiffFromCrackToStartConfig2[iCrackCounter];
+	nVelocityForCrackToStartConfigRight 	:= aThetaDot2RadianPerSecToVoltINT_CTS[iCrackCounter];
+	
+//Making a half step, to wait for the motors to be in the right position:
+	nStateCrackToStartConfig := 15;
+	
+15: //------------------------------------Waiting for motors to hit the desired angle---------------------------------------------------
+
+//Running the left motor until a desired pulse count is reached:
+	IF NOT (GVL_VariableData.iEncoderRotationCounterLeft = GVL_VariableData.iEncoderRotationCounterLeft + (nPulseDiffFromCrackToStartConfigLeft)) THEN
+		IF (nPulseDiffFromCrackToStartConfigLeft < 0) THEN //Checking if the motors should go CW:
+			GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+			GVL_IO.bMotorDriverOutputDigitalLeftCW		:= TRUE;
+			GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityForCrackToStartConfigLeft;
+					
+		ELSIF (nPulseDiffFromCrackToStartConfigLeft > 0) THEN //Checking if the motors should go CCW:
+			GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= TRUE;
+			GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+			GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityForCrackToStartConfigLeft;
+		END_IF
+	END_IF
+		
+	// For the right motor, if the enconder value isn't equal to the startpulse count +- the anglediff the do the operation:
+	IF NOT (GVL_VariableData.iEncoderRotationCounterRight = GVL_VariableData.iEncoderRotationCounterRight + (nPulseDiffFromCrackToStartConfigRight)) THEN
+		IF (nPulseDiffFromCrackToStartConfigRight < 0) THEN //Checking if the motors should go CW:
+			GVL_IO.bMotorDriverOutputDigitalRightCCW		:= FALSE;
+			GVL_IO.bMotorDriverOutputDigitalRightCW			:= TRUE;
+			GVL_IO.iMotorDriverOutputAnalogRight			:= nVelocityForCrackToStartConfigRight;
+						
+		ELSIF (nPulseDiffFromCrackToStartConfigRight > 0) THEN //Checking if the motors should go CCW:
+			GVL_IO.bMotorDriverOutputDigitalRightCCW		:= TRUE;
+			GVL_IO.bMotorDriverOutputDigitalRightCW			:= FALSE;
+			GVL_IO.iMotorDriverOutputAnalogRight			:= nVelocityForCrackToStartConfigRight;
+		END_IF
+	END_IF
+	
+// Going back to state 20 to get motors to go to the next desired pulse count:
+	IF (GVL_VariableData.iEncoderRotationCounterLeft = GVL_VariableData.iEncoderRotationCounterLeft + (nPulseDiffFromCrackToStartConfigLeft)) AND
+		(GVL_VariableData.iEncoderRotationCounterRight = GVL_VariableData.iEncoderRotationCounterRight + (nPulseDiffFromCrackToStartConfigRight)) THEN
+		bStep15Done := TRUE;	
+		nStateCrackToStartConfig := 10;
+	END_IF
+
+(* When the encoder value is equal to the disired pulse count of the start angle of the crack, then shift state to do the
+	sequence of code. This is the crack sealing operation. *)
+IF (GVL_VariableData.iEncoderRotationCounterLeft = GVL_VariableData.nStartConfigAngleInPulseLeft) AND 
+	(GVL_VariableData.iEncoderRotationCounterRight = GVL_VariableData.nStartConfigAngleInPulseRight) THEN
+		nStateCrackToStartConfig := 20;	 		// Initiating done moving from start confiuration to crack.
+END_IF
+
+20: //----------------------------------Movement fra start configuration to crack start finished----------------------------------------
+// Saying that the movement of the robot from start configuration to crack start is done:
+	bMoveFromCrackToStartConfigDone := TRUE;
+	
+END_CASE
+
+
+
+
+
+
+]]></ST>
+    </Implementation>
+    <LineIds Name="FB_CrackToStartConfig">
+      <LineId Id="200" Count="1" />
+      <LineId Id="246" Count="0" />
+      <LineId Id="207" Count="0" />
+      <LineId Id="209" Count="5" />
+      <LineId Id="216" Count="5" />
+      <LineId Id="305" Count="2" />
+      <LineId Id="225" Count="3" />
+      <LineId Id="316" Count="0" />
+      <LineId Id="315" Count="0" />
+      <LineId Id="229" Count="0" />
+      <LineId Id="317" Count="0" />
+      <LineId Id="230" Count="2" />
+      <LineId Id="318" Count="0" />
+      <LineId Id="233" Count="7" />
+      <LineId Id="319" Count="0" />
+      <LineId Id="241" Count="4" />
+      <LineId Id="388" Count="0" />
+      <LineId Id="395" Count="76" />
+      <LineId Id="389" Count="5" />
+      <LineId Id="387" Count="0" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

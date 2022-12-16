@@ -1,0 +1,78 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_Encoder" Id="{dc67246c-da9f-4180-9fb1-000ea3414259}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_Encoder
+VAR_INPUT
+END_VAR
+
+VAR_OUTPUT
+END_VAR
+
+VAR
+// Trig function to detect each pulse for CW and CCW left:
+	EncoderR_TrigCWLeft				: R_TRIG;
+	EncoderR_TrigCCWLeft			: R_TRIG;
+	
+// Trig function to detect each pulse for CW and CCW left:
+	EncoderR_TrigCWRight			: R_TRIG;
+	EncoderR_TrigCCWRight			: R_TRIG;	
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(* This encoder function block runs througth the whole code, it does this for us to know where we are.  *)
+
+(*Registering the pulse signal from left motor, this only gets a input is the digital input is true. This will register if
+	the motor runs CW or CCW.*)
+	IF GVL_IO.bMotorDriverOutputDigitalLeftCW THEN
+		EncoderR_TrigCWLeft(CLK  := GVL_IO.bEncoderInputPulseCountLeft);
+	ELSIF GVL_IO.bMotorDriverOutputDigitalLeftCCW THEN
+		EncoderR_TrigCCWLeft(CLK := GVL_IO.bEncoderInputPulseCountLeft);
+	END_IF
+
+(*Registering the pulse signal from right motor, this only gets a input is the digital input is true. This will register if
+	the motor runs CW or CCW.*)
+	IF GVL_IO.bMotorDriverOutputDigitalRightCW THEN
+		EncoderR_TrigCWRight(CLK := GVL_IO.bEncoderInputPulseCountRight);
+	ELSIF GVL_IO.bMotorDriverOutputDigitalRightCCW THEN
+		EncoderR_TrigCCWRight(CLK:= GVL_IO.bEncoderInputPulseCountRight);
+	END_IF
+
+//Counting the encoder value, +1 if CCW and -1 if CW. This is for the left motor. We declare our encoder right counter here: 
+	IF EncoderR_TrigCWLeft.Q THEN
+		GVL_VariableData.iEncoderRotationCounterLeft	:= GVL_VariableData.iEncoderRotationCounterLeft - 1; 
+		GVL_IO.bMotorDriverOutputDigitalLeftCW			:= FALSE;
+	ELSIF EncoderR_TrigCCWLeft.Q THEN
+		GVL_VariableData.iEncoderRotationCounterLeft	:= GVL_VariableData.iEncoderRotationCounterLeft + 1;
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW			:= FALSE;
+	END_IF
+
+//Counting the encoder value, +1 if CCW and -1 if CW. We declare our encoder left counter here:
+	IF EncoderR_TrigCWRight.Q THEN
+		GVL_VariableData.iEncoderRotationCounterRight	:= GVL_VariableData.iEncoderRotationCounterRight - 1;
+		GVL_IO.bMotorDriverOutputDigitalRightCW			:= FALSE;
+	ELSIF EncoderR_TrigCCWRight.Q THEN
+		GVL_VariableData.iEncoderRotationCounterRight	:= GVL_VariableData.iEncoderRotationCounterRight + 1;
+		GVL_IO.bMotorDriverOutputDigitalRightCCW		:= FALSE;
+	END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="FB_Encoder">
+      <LineId Id="16" Count="2" />
+      <LineId Id="175" Count="0" />
+      <LineId Id="108" Count="0" />
+      <LineId Id="19" Count="0" />
+      <LineId Id="109" Count="0" />
+      <LineId Id="20" Count="0" />
+      <LineId Id="111" Count="0" />
+      <LineId Id="21" Count="0" />
+      <LineId Id="186" Count="0" />
+      <LineId Id="22" Count="0" />
+      <LineId Id="177" Count="3" />
+      <LineId Id="176" Count="0" />
+      <LineId Id="26" Count="3" />
+      <LineId Id="185" Count="0" />
+      <LineId Id="181" Count="3" />
+      <LineId Id="36" Count="4" />
+      <LineId Id="42" Count="3" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
