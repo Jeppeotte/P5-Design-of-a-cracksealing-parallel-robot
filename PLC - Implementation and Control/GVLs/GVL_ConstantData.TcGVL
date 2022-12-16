@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <GVL Name="GVL_ConstantData" Id="{ef3673b3-81ae-496d-af47-7fa21286cef0}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+VAR_GLOBAL
+	
+//Længder af arme og afstande:
+	L0Full	: REAL := 0.250;
+	L0		: REAL := 0.125; //husk dette er den halve
+	L1		: REAL := 0.620;
+	L2		: REAL := 0.620;
+	L3		: REAL := 0.745;
+	L4		: REAL := 0.745;
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>
