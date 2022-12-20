@@ -1,0 +1,209 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="MAIN" Id="{bd6a2400-622a-4bd8-b6bd-c3b01af60c11}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+//Variable to see if program is online:
+	iAlive 						: INT;
+	
+//Functionblocks:
+	fb_Homing_Start 			: FB_Homing_Start;
+	fb_InverseKinematics 		: FB_InverseKinematics;
+	fb_StartConfigToCrack		: FB_StartConfigToCrack;
+	fb_CrackToStartConfig		: FB_CrackToStartConfig;
+
+//Counter and state for CASE:	
+	iMainCounter				: INT;
+	nStateCrackSealing			: INT;
+	bDoneHoming					: BOOL;
+	bDoneCrackSealing			: BOOL;
+	iMainTimeCounter			: CTU;
+
+//Saving values for crack sealing operation:
+	//Left motor:
+	nPulseDiffForCrackSealingLeft: INT;
+	nVelocityForCrackSealingLeft: INT;
+	
+	//Right motor:
+	nPulseDiffForCrackSealingRight: INT;
+	nVelocityForCrackSealingRight: INT;
+	
+//Conversion variables
+	RadianToPulse				: LREAL;
+	
+//Timer, timer inputs and increments:
+	bStartTimerCrackSealing: BOOL;
+	tMainIncrements: TIME;
+	tMainTimer: TON;
+END_VAR
+
+VAR CONSTANT
+	NUMBER_OF_RUNS_W : WORD := 20;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[iAlive := iAlive + 1;						//Checking if program is online
+
+//Conversion values:
+	RadianToPulse		:= (pi*2)/(500*43);
+
+//Defining GVL's for use later i MAIN code:
+	//Calculating homing angles in raidan:
+	GVL_Data.nHomingAngleLeft := ((215*2*pi)/360);
+	GVL_Data.nHomingAngleRight := ((-35*pi)/180);
+	
+	// Calculating homingangle to pulses:
+	GVL_Data.nHomingAngleInPulseLeft := LREAL_TO_INT(((200*pi)/180)/RadianToPulse);
+	GVL_Data.nHomingAngleInPulseRight := LREAL_TO_INT(((-20*pi)/180)/RadianToPulse);
+	
+	// Calculating start configuration angles in radian:
+	GVL_Data.nStartConfigAngleLeft := ((135*pi)/180);
+	GVL_Data.nStartConfigAngleRight := ((45*pi)/180);
+		
+	// Calculating start configuration angle to pulses:
+	GVL_Data.nStartConfigInPulseLeft := LREAL_TO_INT(((135*pi)/180)/RadianToPulse);
+	GVL_Data.nStartConfigInPulseRight := LREAL_TO_INT(((45*pi)/180)/RadianToPulse);
+
+//-------------------------------Start of MAIN code----------------------------------------------------------------------------------
+// Exitbutton:
+IF GVL_IO.bStopPLC THEN 
+	
+CASE nStateCrackSealing OF
+
+0 : //--------Program start---------------------------------------------------------------------------------------------
+	IF GVL_IO.bStartPLC THEN						// Press start button program is online.
+		nStateCrackSealing := 10;					// Initiating HomingSequence.
+	END_IF
+
+10 : //--------Homing sequence----------------------------------------------------------------------------------------------------
+
+	bDoneHoming := FALSE;
+	
+//Running function block homing:
+	fb_Homing_Start();
+
+//Shifting state when robot has achived start configuration:						
+	IF fb_Homing_Start.bStartConfigurationComplete THEN
+		bDoneHoming := TRUE;			
+		nStateCrackSealing := 60;					// Initiating inverse kinematics calculations.
+	END_IF
+
+20 : //--------Calculating inverse kinematics---------------------------------------------------------------------------------------------	
+
+//Running function block inverse kinematics:
+	fb_InverseKinematics();
+
+//Shifting state when inverse kinematics calculations are done:						
+	IF fb_InverseKinematics.bDoneINV THEN			
+		nStateCrackSealing := 30;					// Initiating "Moving from StartConfiguration to Crack".
+	END_IF
+	
+30 : //--------Moving from StartConfiguration to Crack---------------------------------------------------------------------------------------------
+// Calling functionblock: 
+	fb_StartConfigToCrack();
+	bDoneHoming := TRUE;
+
+//Shifting state when the robot has moved to the start of the crack:
+	IF fb_StartConfigToCrack.bMoveFromStartConfigToCrackDone THEN
+		nStateCrackSealing :=40;
+	END_IF
+
+40: //--------------------------------------Cracksealing------------------------------------------------------------------------------------
+
+//Initianting timer on-delay:
+	bStartTimerCrackSealing 			:= TRUE;
+	tMainIncrements 					:= T#105MS;
+	tMainTimer							(IN := bStartTimerCrackSealing AND NOT tMainTimer.Q, PT := tMainIncrements);
+	iMainTimeCounter					(CU := tMainTimer.Q, PV := NUMBER_OF_RUNS_W);
+
+
+//Saving angle and velocity in volt for next case step:
+	//Left motor:
+	nPulseDiffForCrackSealingLeft 		:= fb_InverseKinematics.aPulseDiffForTheCrackTheta1[iMainTimeCounter.CV];
+	nVelocityForCrackSealingLeft 		:= fb_InverseKinematics.aThetaDot1RadianPerSecToVoltINT_InverseKinematics[iMainTimeCounter.CV];
+	
+	//Right motor:
+	nPulseDiffForCrackSealingRight 		:= fb_InverseKinematics.aPulseDiffForTheCrackTheta2[iMainTimeCounter.CV];
+	nVelocityForCrackSealingRight 		:= fb_InverseKinematics.aThetaDot2RadianPerSecToVoltINT_InverseKinematics[iMainTimeCounter.CV];
+
+	
+IF NOT tMainTimer.Q THEN
+	IF (nPulseDiffForCrackSealingLeft = 0) THEN
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= 0;
+				
+	ELSIF (nPulseDiffForCrackSealingLeft < 0) THEN	
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityForCrackSealingLeft;
+				
+	ELSIF (nPulseDiffForCrackSealingLeft > 0) THEN	
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityForCrackSealingLeft;
+	END_IF
+
+	IF (nPulseDiffForCrackSealingRight = 0) THEN
+		GVL_IO.bMotorDriverOutputDigitalRightCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW			:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight			:= 0;
+				
+	ELSIF (nPulseDiffForCrackSealingRight < 0) THEN	
+		GVL_IO.bMotorDriverOutputDigitalRightCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW			:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogRight			:= nVelocityForCrackSealingRight;
+				
+	ELSIF (nPulseDiffForCrackSealingRight > 0) THEN	
+		GVL_IO.bMotorDriverOutputDigitalRightCCW		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW			:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight			:= nVelocityForCrackSealingRight;
+	END_IF		
+END_IF
+
+IF iMainTimeCounter.Q THEN
+	nStateCrackSealing := 50;
+	bDoneCrackSealing := TRUE;
+END_IF
+
+
+50: //-----------------------------------------Moving from crack to start configuration--------------------------------------------
+	fb_CrackToStartConfig();
+	//bDoneCrackSealing := TRUE;
+	
+	IF fb_CrackToStartConfig.bMoveFromCrackToStartConfigDone THEN
+		nStateCrackSealing := 60;
+	END_IF
+
+60: //----------------------------Shutting off motors-------------------------------------------------------------------------------
+	GVL_IO.iMotorDriverOutputAnalogLeft := 0;
+	GVL_IO.iMotorDriverOutputAnalogRight := 0;
+	GVL_IO.bMotorDriverOutputDigitalLeftCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalLeftCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCW := FALSE;
+
+END_CASE
+
+ELSIF NOT GVL_IO.bStopPLC THEN
+	GVL_IO.iMotorDriverOutputAnalogLeft := 0;
+	GVL_IO.iMotorDriverOutputAnalogRight := 0;
+	GVL_IO.bMotorDriverOutputDigitalLeftCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalLeftCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCW := FALSE;
+END_IF]]></ST>
+    </Implementation>
+    <Folder Name="VISUs" Id="{f1771f61-5a3c-4c10-860e-eafea9fa5246}" />
+    <LineIds Name="MAIN">
+      <LineId Id="4953" Count="20" />
+      <LineId Id="4975" Count="37" />
+      <LineId Id="5274" Count="0" />
+      <LineId Id="5013" Count="4" />
+      <LineId Id="5029" Count="57" />
+      <LineId Id="5235" Count="0" />
+      <LineId Id="5087" Count="3" />
+      <LineId Id="5275" Count="0" />
+      <LineId Id="5091" Count="21" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

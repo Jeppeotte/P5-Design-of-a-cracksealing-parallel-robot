@@ -1,0 +1,262 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_CrackToStartConfig" Id="{bea5097c-bebc-4167-b071-e8eec1160da0}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_CrackToStartConfig
+VAR_INPUT
+	//Variables for the polynomial for the left motor:
+	a0Left 						: LREAL ;
+	a1Left 						: LREAL ;
+	a2Left 						: LREAL ;
+	a3Left 						: LREAL ;
+	
+	//Variables for the polynomial for the right motor:
+	a0Right 					: LREAL ;
+	a1Right						: LREAL ;
+	a2Right						: LREAL ;
+	a3Right 					: LREAL ;
+END_VAR
+
+VAR_OUTPUT
+		bMoveFromCrackToStartConfigDone			: BOOL;
+END_VAR
+
+VAR
+//Timer, counter and states for CASE shifts:
+	tTimer 									: LREAL ;
+	iVelocityCounterL						: INT;
+	iVelocityCounterR						: INT;
+	iCrackCounter							: INT;
+	nStateCrackToStartConfig				: INT;
+	bStep15Done								: BOOL;
+
+//Angle and angular velocity for theta 1 (left motor):
+	nTheta1CrackToStartConfig				: LREAL;	
+	nThetaDot1CrackToStartConfig			: LREAL;
+	nPulseDiffFromCrackToStartConfigLeft	: INT;
+	nVelocityForCrackToStartConfigLeft		: INT;
+
+//Arrays for saving angle and angular velocity:
+	aPulseFromCrackToStartConfig1			: ARRAY[0..NUMBER_OF_RUNS_I_Left] OF INT;
+	aPulseDiffFromCrackToStartConfig1		: ARRAY[0..NUMBER_OF_RUNS_I_Left] OF INT;
+	aThetaDot1RadianPerSecToVoltINT_CTS		: ARRAY[0..NUMBER_OF_RUNS_I_Left] OF INT;
+	
+//Angle and angular velocity for theta 2 (right motor):	
+	nTheta2CrackToStartConfig				: LREAL;
+	nThetaDot2CrackToStartConfig			: LREAL;
+	nPulseDiffFromCrackToStartConfigRight	: INT;
+	nVelocityForCrackToStartConfigRight		: INT;
+	
+//Arrays for saving angle and angular velocity for theta 2 (right motor):
+	aPulseFromCrackToStartConfig2			: ARRAY[0..NUMBER_OF_RUNS_I_Right] OF INT;
+	aPulseDiffFromCrackToStartConfig2		: ARRAY[0..NUMBER_OF_RUNS_I_Right] OF INT;
+	aThetaDot2RadianPerSecToVoltINT_CTS		: ARRAY[0..NUMBER_OF_RUNS_I_Right] OF INT;
+
+//Conversion variables:
+	nRadianToPulse 							: LREAL;
+	nRadToRPM								: LREAL;
+	nRPMToVolt								: LREAL;
+	nVoltsInINT								: LREAL;
+	n1VoltToINT								: LREAL;
+
+//Calculation help;	
+	nNumberOfVolts							: LREAL :=10;
+	nMaxRPM									: LREAL :=12000;
+	nMaxPositiveINT							: LREAL :=32767;
+	bStartTimer: BOOL;
+	tCrackIncrements: TIME;
+	tCrackTimer: TON;
+	iCrackTimeCounter: CTU;
+	
+	
+	tTimerL: REAL;
+	nTheta1HomingToStartConfig: LREAL;
+	nThetaDot1HomingToStartConfig: LREAL;
+	
+	tTimerR: REAL;
+	nTheta2HomingToStartConfig: LREAL;
+	nThetaDot2HomingToStartConfig: LREAL;
+END_VAR
+
+VAR CONSTANT
+	//Number of runs the loop has to continue
+	NUMBER_OF_RUNS_I_Left						 : INT := 21 ;
+	NUMBER_OF_RUNS_W_Left						 : WORD := 21 ;
+	
+	//Number of runs the loop has to continue
+	NUMBER_OF_RUNS_I_Right						 : INT := 21 ;
+	NUMBER_OF_RUNS_W_Right						 : WORD := 21 ;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[// Rad to pulse convertation:
+	nRadianToPulse		:= (pi*2)/(500*43);
+
+// Calculating a-values for left mortor:
+	a0Left := GVL_Data.nFinalAngleOfCrack1 ;
+	a1Left := 0 ;
+	a2Left := 3/(EXPT(2,2))*(GVL_Data.nStartConfigAngleLeft - a0Left);
+	a3Left := -2/(EXPT(2,3))*(GVL_Data.nStartConfigAngleLeft - a0Left);
+	
+// Calculating a-values for right mortor:
+	a0Right := GVL_Data.nFinalAngleOfCrack2 ;
+	a1Right := 0 ;
+	a2Right := 3/(EXPT(2,2))*(GVL_Data.nStartConfigAngleRight- a0Right) ;
+	a3Right := -2/(EXPT(2,3))*(GVL_Data.nStartConfigAngleRight - a0Right) ;
+	
+// Calculating Variables:
+	nRadToRPM				:= (60*43)/(2*pi);
+	nRPMToVolt				:= nNumberOfVolts/nMaxRPM ;
+	nVoltsInINT				:= nNumberOfVolts/nMaxPositiveINT;
+	n1VoltToINT				:= (1/(nVoltsInINT));
+
+FOR iVelocityCounterL	:= 0 TO NUMBER_OF_RUNS_I_Left-1 BY 1 DO
+	tTimerL		:= 0.1 * (iVelocityCounterL) ;
+	
+	// Left motor:
+	nTheta1CrackToStartConfig 		:= a0Left + (a1Left*tTimerL) + (a2Left * EXPT(tTimerL,2)) + (a3Left * EXPT(tTimerL,3)) ;	
+	nThetaDot1CrackToStartConfig 	:= a1Left + (2 * a2Left *tTimerL) + (3 * a3Left * EXPT(tTimerL,2)) ;
+	
+	//Arrays for saving data:
+	// Left motor:
+	aPulseFromCrackToStartConfig1[iVelocityCounterL] 			:= LREAL_TO_INT(nTheta1HomingToStartConfig / nRadianToPulse) ;
+	aPulseDiffFromCrackToStartConfig1[iVelocityCounterL] 		:= LREAL_TO_INT(aPulseFromCrackToStartConfig1[iVelocityCounterL+1]-aPulseFromCrackToStartConfig1[iVelocityCounterL]);
+	aThetaDot1RadianPerSecToVoltINT_CTS[iVelocityCounterL]		:= ABS(LREAL_TO_INT((nThetaDot1CrackToStartConfig * (nRadToRPM) * (nRPMToVolt) * (n1VoltToINT)))) ;
+	aPulseDiffFromCrackToStartConfig1[NUMBER_OF_RUNS_I_Left-1] 	:= 0; 
+END_FOR	
+
+FOR iVelocityCounterR	:= 0 TO NUMBER_OF_RUNS_I_Right-1 BY 1 DO
+	tTimerR		:= 0.1 * (iVelocityCounterR) ;
+	
+	// Right motor:
+	nTheta2CrackToStartConfig 		:= a0Right + (a1Right*tTimerR) + (a2Right * EXPT(tTimerR,2)) + (a3Right * EXPT(tTimerR,3)) ;	
+	nThetaDot2CrackToStartConfig 	:= a1Right + (2 * a2Right *tTimerR) + (3 * a3Right * EXPT(tTimerR,2)) ;
+	
+	// Right motor:
+	aPulseFromCrackToStartConfig2[iVelocityCounterR] 			:= LREAL_TO_INT(nTheta2CrackToStartConfig / nRadianToPulse) ;
+	aPulseDiffFromCrackToStartConfig2[iVelocityCounterR]		:= LREAL_TO_INT(aPulseFromCrackToStartConfig2[iVelocityCounterR+1]-aPulseFromCrackToStartConfig2[iVelocityCounterR]);
+	aThetaDot2RadianPerSecToVoltINT_CTS[iVelocityCounterR]		:= ABS(LREAL_TO_INT((nThetaDot2CrackToStartConfig * (nRadToRPM) * (nRPMToVolt) * (n1VoltToINT)))) ;
+	aPulseDiffFromCrackToStartConfig2[NUMBER_OF_RUNS_I_Right-1]:= 0; 
+END_FOR
+
+
+CASE nStateCrackToStartConfig OF
+0: //-------------------------------------------Initiating movement fra start configuration to crack------------------------------
+
+	bMoveFromCrackToStartConfigDone := FALSE;
+
+	IF MAIN.bDoneCrackSealing THEN
+		nStateCrackToStartConfig := 10;
+	END_IF
+	
+5: 
+//Left motor:
+	GVL_IO.iMotorDriverOutputAnalogLeft := 0;
+	GVL_IO.bMotorDriverOutputDigitalLeftCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalLeftCW := FALSE;
+	
+//Right motor:
+	GVL_IO.iMotorDriverOutputAnalogRight := 0;
+	GVL_IO.bMotorDriverOutputDigitalRightCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCW := FALSE;
+
+IF GVL_IO.bStartPLC THEN
+	nStateCrackToStartConfig := 10;
+END_IF
+
+10: //------------------------------------Left and right motor to crack start---------------------------------------------------------
+
+//Initianting timer on-delay:
+	bStartTimer := TRUE;
+	tCrackIncrements := T#100MS;
+	tCrackTimer(IN := bStartTimer AND NOT tCrackTimer.Q, PT := tCrackIncrements);
+	iCrackTimeCounter(CU := tCrackTimer.Q, PV := NUMBER_OF_RUNS_W_Left);
+
+//Saving angle and velocity in volt for next case step:
+	//Left motor:
+	nPulseDiffFromCrackToStartConfigLeft 	:= aPulseDiffFromCrackToStartConfig1[iCrackTimeCounter.CV];
+	nVelocityForCrackToStartConfigLeft 		:= aThetaDot1RadianPerSecToVoltINT_CTS[iCrackTimeCounter.CV];
+	
+	//Right motor:
+	nPulseDiffFromCrackToStartConfigRight 	:= aPulseDiffFromCrackToStartConfig2[iCrackTimeCounter.CV];
+	nVelocityForCrackToStartConfigRight 	:= aThetaDot2RadianPerSecToVoltINT_CTS[iCrackTimeCounter.CV];
+	
+IF NOT tCrackTimer.Q THEN
+	IF (nPulseDiffFromCrackToStartConfigLeft < 0) THEN //Checking if the motors should go CW:
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityForCrackToStartConfigLeft;
+					
+	ELSIF (nPulseDiffFromCrackToStartConfigLeft > 0) THEN //Checking if the motors should go CCW:
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityForCrackToStartConfigLeft;
+	END_IF
+		
+	IF (nPulseDiffFromCrackToStartConfigRight < 0) THEN //Checking if the motors should go CW:
+		GVL_IO.bMotorDriverOutputDigitalRightCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW			:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogRight			:= nVelocityForCrackToStartConfigRight;
+						
+	ELSIF (nPulseDiffFromCrackToStartConfigRight > 0) THEN //Checking if the motors should go CCW:
+		GVL_IO.bMotorDriverOutputDigitalRightCCW		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW			:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight			:= nVelocityForCrackToStartConfigRight;
+	END_IF	
+END_IF
+
+(* When the encoder value is equal to the disired pulse count of the start angle of the crack, then shift state to do the
+	sequence of code. This is the crack sealing operation. *)
+IF iCrackTimeCounter.Q THEN
+	nStateCrackToStartConfig := 20;	 		// Initiating done moving from start confiuration to crack.
+END_IF
+
+20: //----------------------------------Movement fra start configuration to crack start finished----------------------------------------
+// Saying that the movement of the robot from start configuration to crack start is done:
+	bMoveFromCrackToStartConfigDone := TRUE;
+	
+	GVL_IO.iMotorDriverOutputAnalogLeft := 0;
+	GVL_IO.iMotorDriverOutputAnalogRight := 0;
+	GVL_IO.bMotorDriverOutputDigitalLeftCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalLeftCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCW := FALSE;
+	
+END_CASE
+
+
+
+
+
+
+]]></ST>
+    </Implementation>
+    <LineIds Name="FB_CrackToStartConfig">
+      <LineId Id="537" Count="19" />
+      <LineId Id="1032" Count="0" />
+      <LineId Id="1061" Count="26" />
+      <LineId Id="581" Count="0" />
+      <LineId Id="823" Count="0" />
+      <LineId Id="582" Count="8" />
+      <LineId Id="956" Count="1" />
+      <LineId Id="1114" Count="7" />
+      <LineId Id="1113" Count="0" />
+      <LineId Id="1112" Count="0" />
+      <LineId Id="958" Count="2" />
+      <LineId Id="591" Count="2" />
+      <LineId Id="833" Count="3" />
+      <LineId Id="832" Count="0" />
+      <LineId Id="599" Count="8" />
+      <LineId Id="837" Count="0" />
+      <LineId Id="839" Count="21" />
+      <LineId Id="864" Count="5" />
+      <LineId Id="838" Count="0" />
+      <LineId Id="655" Count="3" />
+      <LineId Id="878" Count="0" />
+      <LineId Id="883" Count="0" />
+      <LineId Id="879" Count="3" />
+      <LineId Id="659" Count="0" />
+      <LineId Id="877" Count="0" />
+      <LineId Id="660" Count="6" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

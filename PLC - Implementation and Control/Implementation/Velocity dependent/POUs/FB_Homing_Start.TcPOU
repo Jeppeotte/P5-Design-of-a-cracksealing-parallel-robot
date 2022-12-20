@@ -1,0 +1,383 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="FB_Homing_Start" Id="{006b150a-2f76-4d54-8c38-0719680ad67e}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_Homing_Start
+VAR_INPUT	
+END_VAR
+
+VAR_OUTPUT
+	bStartConfigurationComplete						: BOOL ;
+END_VAR
+
+VAR
+// Counter, timer and state for CASE shifts:
+	iVelocityCounterL							: INT;
+	iVelocityCounterR							: INT;
+	nStateHoming								: INT;
+	tTimerL										: REAL;
+	tTimerR										: REAL;
+	iHomingTimeCounterLeft						: CTU;
+	iHomingTimeCounterRight						: CTU;
+	
+// Coeffcients for calculating angle ang angular velocity for left motor:
+	a0Left										: LREAL;
+	a1Left										: LREAL;
+	a2Left										: LREAL;
+	a3Left										: LREAL;
+	
+// Coeffcients for calculating angle ang angular velocity for right motor:
+	a0Right										: LREAL;
+	a1Right										: LREAL;
+	a2Right										: LREAL;
+	a3Right										: LREAL;
+	
+// Converting variables:
+	nRadianToPulse								: LREAL;
+	nRadToRPM									: LREAL;
+	nRPMToVolt									: LREAL;
+	
+// Calculation help:
+	nNumberOfVolts								: LREAL :=10;
+	nMaxRPM										: LREAL :=12000;
+	nMaxPositiveINT								: LREAL :=32767;
+	nVoltsInINT									: LREAL;
+	n1VoltToINT									: LREAL;
+	n180Degrees									: LREAL := 180;
+	
+// Angle and angular velocity for theta 1
+	nTheta1HomingToStartConfig					: LREAL;
+	nThetaDot1HomingToStartConfig				: LREAL;
+	
+// Angle and angular velocity for theta 2:
+	nTheta2HomingToStartConfig					: LREAL;
+	nThetaDot2HomingToStartConfig				: LREAL;
+	
+// Arrays with angles and volts for theta 1:
+	aPulseFromHomingToStartConfigLeft				: ARRAY[0..NUMBER_OF_RUNS_I_Left] OF LREAL;
+	aPulseDiffFromHomingToStartConfigLeft			: ARRAY[0..NUMBER_OF_RUNS_I_Left] OF INT;
+	aThetaDot1RadianPerSecToVoltINT_Homing		: ARRAY[0..NUMBER_OF_RUNS_I_Left] OF INT;
+
+// Arrays with angles and volts for theta 2:
+	aPulseFromHomingToStartConfigRight				: ARRAY[0..NUMBER_OF_RUNS_I_Right] OF LREAL;
+	aPulseDiffFromHomingToStartConfigRight			: ARRAY[0..NUMBER_OF_RUNS_I_Right] OF INT;
+	aThetaDot2RadianPerSecToVoltINT_Homing		: ARRAY[0..NUMBER_OF_RUNS_I_Right] OF INT;
+
+// Saving values
+	nVelocityToVoltLeft: INT;
+	nVelocityToVoltRight: INT;
+	nPulseDiffFromHomingToStartConfigLeft : INT;
+	nPulseDiffFromHomingToStartConfigRight: INT;
+
+//Timer, timer input and time increments
+	bStartTimerLeftArm						: BOOL;
+	bStartTimerRightArm						: BOOL;
+	tHomingIncrements						: TIME;
+	tHomingTimerLeft						: TON;
+	tHomingTimerRight 						: TON;
+	
+	tTestTimer3 							: TON;
+	iTestCounter3							: CTU;
+	bStartTestTimer3						: BOOL;
+	
+	tTestTimer2 							: TON;
+	iTestCounter2							: CTU;
+	bStartTestTimer2						: BOOL;
+	
+	tTestTimer 								: TON;
+	iTestCounter							: CTU;
+	bStartTestTimer							: BOOL;
+	tTestIncrements							: TIME := T#100MS;
+	
+END_VAR
+
+VAR CONSTANT
+	//Left motor
+	NUMBER_OF_RUNS_W_Left								: WORD := 21;
+	NUMBER_OF_RUNS_I_Left								: INT := 21;
+	
+	//Right motor
+	NUMBER_OF_RUNS_W_Right								: WORD := 11;
+	NUMBER_OF_RUNS_I_Right								: INT := 11;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(* Homing has been given 5 secondes to take place, this is for each of the motors *)
+
+// Rad to pulse convertation:
+	//nRadianToPulse		:= (pi*2)/(500*43);
+	nRadianToPulse		:= (pi*2)/(360*43);
+	
+// Calculating a-values for left mortor:
+	a0Left := GVL_Data.nHomingAngleLeft ;
+	a1Left := 0 ;
+	a2Left := 3/(EXPT(2,2))*(GVL_Data.nStartConfigAngleLeft - a0Left) ; 
+	a3Left := -2/(EXPT(2,3))*(GVL_Data.nStartConfigAngleLeft - a0Left) ;
+	
+// Calculating a-values for right mortor:
+	a0Right := GVL_Data.nHomingAngleRight ;
+	a1Right := 0 ;
+	a2Right := (3/(EXPT(1,2)))*(GVL_Data.nStartConfigAngleRight - a0Right) ;
+	a3Right := (-2/(EXPT(1,3)))*(GVL_Data.nStartConfigAngleRight - a0Right) ;
+	
+// Calculating Variables:
+	nRadToRPM				:= (60*43)/(2*pi);
+	nRPMToVolt				:= nNumberOfVolts/nMaxRPM ;
+	nVoltsInINT				:= nNumberOfVolts/nMaxPositiveINT;
+	n1VoltToINT				:= (1/(nVoltsInINT));
+
+FOR iVelocityCounterL	:= 0 TO NUMBER_OF_RUNS_I_Left-1 BY 1 DO
+	tTimerL		:= 0.1 * (iVelocityCounterL) ;
+	
+	// Left motor:
+	nTheta1HomingToStartConfig 		:= a0Left + (a1Left*tTimerL) + (a2Left * EXPT(tTimerL,2)) + (a3Left * EXPT(tTimerL,3)) ;	
+	nThetaDot1HomingToStartConfig 	:= a1Left + (2 * a2Left *tTimerL) + (3 * a3Left * EXPT(tTimerL,2)) ;
+	
+	//Arrays for saving data:
+	// Left motor:
+	aPulseFromHomingToStartConfigLeft[iVelocityCounterL] 			:= LREAL_TO_INT(nTheta1HomingToStartConfig / nRadianToPulse) ;
+	aPulseDiffFromHomingToStartConfigLeft[iVelocityCounterL] 		:= LREAL_TO_INT(aPulseFromHomingToStartConfigLeft[iVelocityCounterL+1]-aPulseFromHomingToStartConfigLeft[iVelocityCounterL]);
+	aThetaDot1RadianPerSecToVoltINT_Homing[iVelocityCounterL]		:= ABS(LREAL_TO_INT((nThetaDot1HomingToStartConfig * (nRadToRPM) * (nRPMToVolt) * (n1VoltToINT)))) ;
+	aPulseDiffFromHomingToStartConfigLeft[NUMBER_OF_RUNS_I_Left-1] 	:= 0; 
+END_FOR	
+
+FOR iVelocityCounterR	:= 0 TO NUMBER_OF_RUNS_I_Right-1 BY 1 DO
+	tTimerR		:= 0.1 * (iVelocityCounterR) ;
+	
+	// Right motor:
+	nTheta2HomingToStartConfig 		:= a0Right + (a1Right*tTimerR) + (a2Right * EXPT(tTimerR,2)) + (a3Right * EXPT(tTimerR,3)) ;	
+	nThetaDot2HomingToStartConfig 	:= a1Right + (2 * a2Right *tTimerR) + (3 * a3Right * EXPT(tTimerR,2)) ;
+	
+	// Right motor:
+	aPulseFromHomingToStartConfigRight[iVelocityCounterR] 			:= LREAL_TO_INT(nTheta2HomingToStartConfig / nRadianToPulse) ;
+	aPulseDiffFromHomingToStartConfigRight[iVelocityCounterR]		:= LREAL_TO_INT(aPulseFromHomingToStartConfigRight[iVelocityCounterR+1]-aPulseFromHomingToStartConfigRight[iVelocityCounterR]);
+	aThetaDot2RadianPerSecToVoltINT_Homing[iVelocityCounterR]		:= ABS(LREAL_TO_INT((nThetaDot2HomingToStartConfig * (nRadToRPM) * (nRPMToVolt) * (n1VoltToINT)))) ;
+	aPulseDiffFromHomingToStartConfigRight[NUMBER_OF_RUNS_I_Right-1]:= 0; 
+END_FOR
+
+//-------------------------------------------Homing sequence----------------------------------------------------------------------
+
+CASE nStateHoming OF
+0: //-----------------------------------------Initiating homing--------------------------------------------------------------------
+	bStartConfigurationComplete 	:= FALSE;
+	nStateHoming 					:= 10;
+
+10 : //---------------------------------------Turning on PLC------------------------------------------------------------------------
+	
+	IF GVL_IO.bStartPLC THEN 
+		nStateHoming := 20;
+	END_IF
+
+20 : //---------------------------------------Motors running to hit homebotton left------------------------------------------------
+	
+	//Left motor:
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW 		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW 			:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft 			:= 500;
+	
+	//Right motor:
+		GVL_IO.bMotorDriverOutputDigitalRightCCW 		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW 		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight 			:= 500;    
+	
+	IF GVL_IO.bHomingLeft THEN
+		nStateHoming := 25;
+	END_IF
+	
+25:
+	GVL_IO.iMotorDriverOutputAnalogLeft 			:= 0;    
+	GVL_IO.iMotorDriverOutputAnalogRight 			:= 0;    
+
+	bStartTestTimer := TRUE;
+	tTestTimer(IN := bStartTestTimer AND NOT tTestTimer.Q, PT := tTestIncrements);
+	iTestCounter(CU := tTestTimer.Q, PV := 5);
+	
+	IF iTestCounter.Q THEN
+		nStateHoming := 30;
+	END_IF
+	
+
+
+30: //-----------------------------------------Left arm to start configuration---------------------------------------------------------------------
+
+//Initianting timer on-delay for the left arm:
+	bStartTimerLeftArm 			:= TRUE;
+	tHomingIncrements 			:= T#100MS;
+	tHomingTimerLeft			(IN := bStartTimerLeftArm AND NOT tHomingTimerLeft.Q, PT := tHomingIncrements);
+	iHomingTimeCounterLeft		(CU := tHomingTimerLeft.Q, PV := NUMBER_OF_RUNS_W_Left);
+	
+//Saving motor values for the left motor, for use in the next case:
+	nVelocityToVoltLeft 					:= aThetaDot1RadianPerSecToVoltINT_Homing[iHomingTimeCounterLeft.CV];
+	nPulseDiffFromHomingToStartConfigLeft	:= aPulseDiffFromHomingToStartConfigLeft[iHomingTimeCounterLeft.CV];
+
+//Running motors in time interval of 100ms, and deciding CW and CCW based on angle diff:
+IF NOT tHomingTimerLeft.Q THEN
+	//Both motors running with same speed and pulse count, to have a smooth motion:
+	IF (nPulseDiffFromHomingToStartConfigLeft < 0) THEN
+		//Left motor
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityToVoltLeft;
+			
+		//Right motor
+		GVL_IO.bMotorDriverOutputDigitalRightCCW	:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW		:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogRight		:= nVelocityToVoltLeft;
+			
+	ELSIF (nPulseDiffFromHomingToStartConfigLeft > 0) THEN
+		//Left motor
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= nVelocityToVoltLeft;
+		
+		//Right motor
+		GVL_IO.bMotorDriverOutputDigitalRightCCW	:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight		:= nVelocityToVoltLeft;
+	
+	ELSIF (nPulseDiffFromHomingToStartConfigLeft = 0) THEN
+		//Left motor
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= 0;
+		
+		//Right motor
+		GVL_IO.bMotorDriverOutputDigitalRightCCW	:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight		:= 0;
+		
+	END_IF
+END_IF
+
+//Shifting state when timer counter is true:
+IF iHomingTimeCounterLeft.Q THEN
+	bStartTimerLeftArm := FALSE;
+	nStateHoming := 40;
+END_IF
+
+40: //-----------------------------------------Homing right arm--------------------------------------------------------------------------
+	
+//Left motor:
+	GVL_IO.bMotorDriverOutputDigitalLeftCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalLeftCW := FALSE;
+	GVL_IO.iMotorDriverOutputAnalogLeft := 0;					//Not running to hold startconfig position:
+		
+//Right motor:
+	GVL_IO.bMotorDriverOutputDigitalRightCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCW := TRUE;
+	GVL_IO.iMotorDriverOutputAnalogRight := 500;
+
+//Shifting state when homeright botton is hit
+IF GVL_IO.bHomingRight THEN
+	nStateHoming := 45;
+END_IF
+
+45: //------------------------------------Venter lige lidt----------------------------------
+	GVL_IO.iMotorDriverOutputAnalogRight 			:= 0;    
+
+	bStartTestTimer2 := TRUE;
+	tTestTimer2(IN := bStartTestTimer2 AND NOT tTestTimer2.Q, PT := tTestIncrements);
+	iTestCounter2(CU := tTestTimer2.Q, PV := 5);
+	
+	IF iTestCounter2.Q THEN
+		nStateHoming := 50;
+	END_IF
+	
+
+50: //--------------------------------------------Right arm to start configuration-----------------------------------------------------
+
+//Starting timer on-delay for the right arm:
+	bStartTimerRightArm 			:= TRUE;
+	tHomingTimerRight			(IN := bStartTimerRightArm AND NOT tHomingTimerRight.Q, PT := tHomingIncrements);
+	iHomingTimeCounterRight		(CU := tHomingTimerRight.Q, PV := NUMBER_OF_RUNS_W_Right);
+
+//Saving motor values for the right motor, for use in the next case:
+	nVelocityToVoltRight 					:= aThetaDot2RadianPerSecToVoltINT_Homing[iHomingTimeCounterRight.CV];
+	nPulseDiffFromHomingToStartConfigRight	:= aPulseDiffFromHomingToStartConfigRight[iHomingTimeCounterRight.CV];
+
+//Running right motor, and holding left arm:
+IF NOT tHomingTimerRight.Q THEN
+	//Making sure motor left does not run:
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW 	:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW 		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft 		:= 0;
+		
+	//Right motor running:
+	IF (nPulseDiffFromHomingToStartConfigRight < 0) THEN		
+		GVL_IO.bMotorDriverOutputDigitalRightCCW	:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW		:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogRight		:= nVelocityToVoltRight;
+		
+	ELSIF (nPulseDiffFromHomingToStartConfigRight > 0) THEN
+		GVL_IO.bMotorDriverOutputDigitalRightCCW	:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogRight		:= nVelocityToVoltRight;
+			
+	ELSIF (nPulseDiffFromHomingToStartConfigLeft = 0) THEN
+	//Left motor
+		GVL_IO.bMotorDriverOutputDigitalLeftCCW		:= FALSE;
+		GVL_IO.bMotorDriverOutputDigitalLeftCW		:= FALSE;
+		GVL_IO.iMotorDriverOutputAnalogLeft			:= 0;
+		
+	//Right motor
+		GVL_IO.bMotorDriverOutputDigitalRightCCW	:= TRUE;
+		GVL_IO.bMotorDriverOutputDigitalRightCW		:= TRUE;
+		GVL_IO.iMotorDriverOutputAnalogRight		:= 0;
+	END_IF	
+END_IF
+
+//Shifting state when right timer is done
+IF iHomingTimeCounterRight.Q THEN
+	nStateHoming := 60;
+END_IF
+
+60 : //--------------------------------Shutting off motors------------------------------------------------------------------------------
+//Left motor
+	GVL_IO.bMotorDriverOutputDigitalLeftCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalLeftCW := FALSE;
+	GVL_IO.iMotorDriverOutputAnalogLeft := 0;
+
+//Right motor
+	GVL_IO.bMotorDriverOutputDigitalRightCCW := FALSE;
+	GVL_IO.bMotorDriverOutputDigitalRightCW := FALSE;
+	GVL_IO.iMotorDriverOutputAnalogRight := 0;
+
+//Now in start configuration
+	bStartConfigurationComplete := TRUE;
+END_CASE	]]></ST>
+    </Implementation>
+    <LineIds Name="FB_Homing_Start">
+      <LineId Id="5591" Count="4" />
+      <LineId Id="6224" Count="0" />
+      <LineId Id="5596" Count="20" />
+      <LineId Id="5908" Count="0" />
+      <LineId Id="5617" Count="1" />
+      <LineId Id="5622" Count="6" />
+      <LineId Id="5635" Count="0" />
+      <LineId Id="5801" Count="0" />
+      <LineId Id="5800" Count="0" />
+      <LineId Id="5802" Count="0" />
+      <LineId Id="5809" Count="0" />
+      <LineId Id="5811" Count="2" />
+      <LineId Id="5810" Count="0" />
+      <LineId Id="5820" Count="3" />
+      <LineId Id="5819" Count="0" />
+      <LineId Id="5803" Count="0" />
+      <LineId Id="5636" Count="28" />
+      <LineId Id="5993" Count="1" />
+      <LineId Id="6101" Count="0" />
+      <LineId Id="6113" Count="0" />
+      <LineId Id="6112" Count="0" />
+      <LineId Id="6003" Count="1" />
+      <LineId Id="6006" Count="4" />
+      <LineId Id="6005" Count="0" />
+      <LineId Id="5995" Count="0" />
+      <LineId Id="5665" Count="73" />
+      <LineId Id="6115" Count="0" />
+      <LineId Id="6114" Count="0" />
+      <LineId Id="6117" Count="8" />
+      <LineId Id="6116" Count="0" />
+      <LineId Id="5739" Count="60" />
+      <LineId Id="3875" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
