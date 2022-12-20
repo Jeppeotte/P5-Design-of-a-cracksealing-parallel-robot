@@ -14,7 +14,7 @@ authors:
 - family-names: "Dalum"
   given-names: "Rasmus"
 title: "Software for the semester report 'P5-Design-of-a-cracksealing-parallel-robot'"
-version: 1.0.0
+version: 2.0.0
 doi: 10.5281/zenodo.7463174
 date-released: 2022-12-21
 url: "https://github.com/Jeppeotte/P5-Design-of-a-cracksealing-parallel-robot"
